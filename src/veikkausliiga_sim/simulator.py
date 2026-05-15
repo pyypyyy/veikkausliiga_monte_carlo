@@ -13,6 +13,8 @@ import pandas as pd
 class SimulationResult:
     summary: pd.DataFrame
     position_distribution: pd.DataFrame
+    target_points: pd.DataFrame
+    target_points_by_team: pd.DataFrame
     team_parameters: pd.DataFrame
     fixture_model: pd.DataFrame
 
@@ -224,6 +226,62 @@ def fixture_lambdas(
     return pd.DataFrame(out_rows)
 
 
+
+
+def build_target_points_tables(points: np.ndarray, positions: np.ndarray, teams: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    n_teams = len(teams)
+
+    pooled = pd.DataFrame({
+        "Final pts": points.ravel(),
+        "Position": positions.ravel(),
+    })
+    pooled_stats = pooled.groupby("Final pts").agg(
+        Samples=("Position", "size"),
+        **{
+            "Avg position": ("Position", "mean"),
+            "1st %": ("Position", lambda x: (x == 1).mean()),
+            "Top3 %": ("Position", lambda x: (x <= 3).mean()),
+            "Top6 %": ("Position", lambda x: (x <= 6).mean()),
+            "12th %": ("Position", lambda x: (x == n_teams).mean()),
+        },
+    )
+    pooled_pos = (
+        pooled.pivot_table(index="Final pts", columns="Position", values="Position", aggfunc="size", fill_value=0)
+        .reindex(columns=range(1, n_teams + 1), fill_value=0)
+        .div(pooled_stats["Samples"], axis=0)
+    )
+    pooled_pos.columns = [f"Pos {pos} %" for pos in pooled_pos.columns]
+    pooled_out = pooled_stats.join(pooled_pos).reset_index().sort_values("Final pts").reset_index(drop=True)
+
+    team_frames: list[pd.DataFrame] = []
+    for team_idx, team in enumerate(teams):
+        team_df = pd.DataFrame({
+            "Final pts": points[:, team_idx],
+            "Position": positions[:, team_idx],
+        })
+        team_stats = team_df.groupby("Final pts").agg(
+            Samples=("Position", "size"),
+            **{
+                "Avg position": ("Position", "mean"),
+                "1st %": ("Position", lambda x: (x == 1).mean()),
+                "Top3 %": ("Position", lambda x: (x <= 3).mean()),
+                "Top6 %": ("Position", lambda x: (x <= 6).mean()),
+                "12th %": ("Position", lambda x: (x == n_teams).mean()),
+            },
+        )
+        team_pos = (
+            team_df.pivot_table(index="Final pts", columns="Position", values="Position", aggfunc="size", fill_value=0)
+            .reindex(columns=range(1, n_teams + 1), fill_value=0)
+            .div(team_stats["Samples"], axis=0)
+        )
+        team_pos.columns = [f"Pos {pos} %" for pos in team_pos.columns]
+        team_out = team_stats.join(team_pos).reset_index()
+        team_out.insert(0, "Team", team)
+        team_frames.append(team_out)
+
+    by_team_out = pd.concat(team_frames, ignore_index=True).sort_values(["Team", "Final pts"]).reset_index(drop=True)
+    return pooled_out, by_team_out
+
 def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
     config_path = Path(config_path)
     base_dir = config_path.parent
@@ -287,6 +345,7 @@ def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
         score += rng.random(score.shape) * 1e-6
 
     order = np.argsort(-score, axis=1)
+    positions = np.empty((n, n_teams), dtype=np.int8)
     position_counts = np.zeros((n_teams, n_teams), dtype=np.int64)
     position_sums = np.zeros(n_teams, dtype=np.float64)
 
@@ -294,6 +353,7 @@ def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
         teams_at_pos = order[:, pos]
         counts = np.bincount(teams_at_pos, minlength=n_teams)
         position_counts[:, pos] = counts
+        positions[np.arange(n), teams_at_pos] = pos + 1
         position_sums += counts * (pos + 1)
 
     avg_points = points.mean(axis=0)
@@ -327,11 +387,14 @@ def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
 
     summary = pd.DataFrame(summary_rows).sort_values(["Avg position", "Avg pts"], ascending=[True, False])
     position_distribution = pd.DataFrame(dist_rows).set_index("Team").loc[summary["Team"]].reset_index()
+    target_points, target_points_by_team = build_target_points_tables(points=points, positions=positions, teams=teams)
     fixture_model = pd.DataFrame(fixture_details)
 
     return SimulationResult(
         summary=summary,
         position_distribution=position_distribution,
+        target_points=target_points,
+        target_points_by_team=target_points_by_team,
         team_parameters=team_params,
         fixture_model=fixture_model,
     )
@@ -344,6 +407,8 @@ def write_excel(result: SimulationResult, config: dict[str, Any], current: pd.Da
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         result.summary.to_excel(writer, sheet_name="Summary", index=False)
         result.position_distribution.to_excel(writer, sheet_name="PositionDistribution", index=False)
+        result.target_points.to_excel(writer, sheet_name="TargetPoints", index=False)
+        result.target_points_by_team.to_excel(writer, sheet_name="TargetPointsByTeam", index=False)
         current.to_excel(writer, sheet_name="CurrentTable", index=False)
         fixtures.to_excel(writer, sheet_name="Fixtures", index=False)
         result.team_parameters.to_excel(writer, sheet_name="TeamParameters", index=False)
