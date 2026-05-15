@@ -92,11 +92,18 @@ Tulostiedostossa on välilehdet:
 |---|---|
 | `Summary` | Pääyhteenveto: keskipisteet, keskisijoitus, voittotodennäköisyys, top-3, top-6 ja jumboriski |
 | `PositionDistribution` | Joukkuekohtainen sijoitusjakauma |
+| `TargetPoints` | Pistekohtainen sijoitusanalyysi kaikille joukkuehavainnoille yhdessä |
+| `TargetPointsByTeam` | Sama pistekohtainen analyysi erikseen jokaiselle joukkueelle |
 | `CurrentTable` | Käytetty lähtötaulukko |
 | `Fixtures` | Käytetty otteluohjelma |
 | `TeamParameters` | Mallin laskemat joukkueparametrit |
 | `FixtureModel` | Ottelukohtaiset lambda-arvot ja 1X2-todennäköisyydet ennen/jälkeen korjauksen |
 | `ModelSettings` | Malliasetukset |
+
+
+## TargetPoints-analyysi
+
+`TargetPoints` näyttää jokaiselle runkosarjan lopulliselle pistemäärälle, kuinka usein kyseinen pistemäärä johtaa eri loppusijoituksiin. Tämä auttaa arvioimaan tavoiterajoja, kuten montako pistettä on yleensä riittävästi top-6 -sijoitukseen. `TargetPoints` yhdistää kaikki joukkueet samaan taulukkoon, kun taas `TargetPointsByTeam` laskee saman analyysin erikseen jokaiselle joukkueelle.
 
 ## What-if-esimerkkejä
 
