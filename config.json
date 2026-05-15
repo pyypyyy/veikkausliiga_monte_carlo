@@ -1,0 +1,32 @@
+{
+  "simulation_count": 100000,
+  "random_seed": 20260515,
+  "data": {
+    "current_table_csv": "data/current_table.csv",
+    "remaining_fixtures_csv": "data/remaining_fixtures.csv",
+    "output_xlsx": "output/simulation_results.xlsx"
+  },
+  "model": {
+    "fixture_lambda_mode": "recompute",
+    "prior_matches_goals": 14,
+    "prior_matches_form": 14,
+    "home_advantage_multiplier": 1.1,
+    "min_lambda": 0.2,
+    "max_lambda": 3.2,
+    "max_goals_per_team": 10,
+    "draw_strength": 0.5,
+    "loss_resistance_strength": 0.55,
+    "win_strength": 0.35,
+    "volatility_strength": 0.25,
+    "min_outcome_factor": 0.55,
+    "max_outcome_factor": 1.55
+  },
+  "ranking": {
+    "tie_breakers": [
+      "points",
+      "goal_difference",
+      "goals_for"
+    ],
+    "random_tie_breaker": true
+  }
+}
