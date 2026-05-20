@@ -4,7 +4,8 @@
   "data": {
     "current_table_csv": "data/current_table.csv",
     "remaining_fixtures_csv": "data/remaining_fixtures.csv",
-    "output_xlsx": "output/simulation_results.xlsx"
+    "output_xlsx": "output/simulation_results.xlsx",
+    "played_results_csv": "data/played_results.csv"
   },
   "model": {
     "fixture_lambda_mode": "recompute",
