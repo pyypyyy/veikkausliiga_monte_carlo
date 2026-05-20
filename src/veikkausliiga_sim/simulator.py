@@ -17,6 +17,8 @@ class SimulationResult:
     target_points_by_team: pd.DataFrame
     team_parameters: pd.DataFrame
     fixture_model: pd.DataFrame
+    schedule_strength: pd.DataFrame
+    data_warnings: list[str]
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -58,6 +60,75 @@ def read_inputs(config: dict[str, Any], base_dir: str | Path) -> tuple[pd.DataFr
         raise ValueError(f"Fixtures contain teams not found in current_table.csv: {sorted(unknown)}")
 
     return current, fixtures
+
+
+def read_played_results(config: dict[str, Any], base_dir: str | Path) -> pd.DataFrame:
+    base = Path(base_dir)
+    played_path = base / config["data"]["played_results_csv"]
+    if not played_path.exists():
+        raise ValueError(f"Required file is missing: {played_path}")
+    played = pd.read_csv(played_path)
+
+    required_cols = {"Home", "Away", "HomeGoals", "AwayGoals"}
+    missing = required_cols - set(played.columns)
+    if missing:
+        raise ValueError(f"played_results.csv is missing columns: {sorted(missing)}")
+
+    for col in ["HomeGoals", "AwayGoals"]:
+        played[col] = pd.to_numeric(played[col], errors="raise")
+        if not np.all(np.equal(played[col], np.floor(played[col]))):
+            raise ValueError(f"{col} in played_results.csv must contain integers.")
+        if (played[col] < 0).any():
+            raise ValueError(f"{col} in played_results.csv must be non-negative.")
+        played[col] = played[col].astype(int)
+
+    return played
+
+
+def validate_played_results(current: pd.DataFrame, fixtures: pd.DataFrame, played_results: pd.DataFrame) -> list[str]:
+    warnings: list[str] = []
+    teams = set(current["Team"])
+    played_teams = set(played_results["Home"]) | set(played_results["Away"])
+    unknown = sorted(played_teams - teams)
+    if unknown:
+        raise ValueError(f"played_results.csv contains teams not found in current_table.csv: {unknown}")
+
+    rows: list[dict[str, Any]] = []
+    for row in played_results.to_dict("records"):
+        home_pts = 3 if row["HomeGoals"] > row["AwayGoals"] else 1 if row["HomeGoals"] == row["AwayGoals"] else 0
+        away_pts = 3 if row["AwayGoals"] > row["HomeGoals"] else 1 if row["HomeGoals"] == row["AwayGoals"] else 0
+        rows.extend(
+            [
+                {"Team": row["Home"], "P": 1, "W": int(row["HomeGoals"] > row["AwayGoals"]), "D": int(row["HomeGoals"] == row["AwayGoals"]), "L": int(row["HomeGoals"] < row["AwayGoals"]), "GF": row["HomeGoals"], "GA": row["AwayGoals"], "Pts": home_pts},
+                {"Team": row["Away"], "P": 1, "W": int(row["AwayGoals"] > row["HomeGoals"]), "D": int(row["HomeGoals"] == row["AwayGoals"]), "L": int(row["AwayGoals"] < row["HomeGoals"]), "GF": row["AwayGoals"], "GA": row["HomeGoals"], "Pts": away_pts},
+            ]
+        )
+
+    implied = pd.DataFrame(rows).groupby("Team", as_index=False)[["P", "W", "D", "L", "GF", "GA", "Pts"]].sum()
+    implied["GD"] = implied["GF"] - implied["GA"]
+    merged = current.merge(implied, on="Team", how="left", suffixes=("_table", "_implied")).fillna(0)
+
+    for metric in ["P", "W", "D", "L", "GF", "GA", "GD", "Pts"]:
+        for row in merged.to_dict("records"):
+            left = int(row[f"{metric}_table"])
+            right = int(row[f"{metric}_implied"])
+            if left != right:
+                warnings.append(
+                    f"Current table {metric} for {row['Team']} is {left} but played_results.csv implies {right}."
+                )
+
+    fixture_cols = ["Home", "Away"]
+    if "Date" in fixtures.columns and "Date" in played_results.columns:
+        fixture_cols.append("Date")
+    fixture_keys = set(tuple(x) for x in fixtures[fixture_cols].astype(str).to_numpy())
+    played_keys = set(tuple(x) for x in played_results[fixture_cols].astype(str).to_numpy())
+    for key in sorted(fixture_keys & played_keys):
+        if len(key) == 3:
+            warnings.append(f"remaining_fixtures.csv still contains a played match: {key[0]} vs {key[1]} on {key[2]}.")
+        else:
+            warnings.append(f"remaining_fixtures.csv still contains a played match: {key[0]} vs {key[1]}.")
+
+    return warnings
 
 
 def compute_team_parameters(current: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
@@ -112,6 +183,62 @@ def compute_team_parameters(current: pd.DataFrame, config: dict[str, Any]) -> pd
         )
 
     return pd.DataFrame(rows)
+
+
+def compute_schedule_strength(current: pd.DataFrame, played_results: pd.DataFrame) -> pd.DataFrame:
+    SCHEDULE_ADJUSTMENT_WEIGHT = 0.35
+    table = current.copy()
+    table["points_per_game"] = table["Pts"] / table["P"].clip(lower=1)
+    table["goal_difference_per_game"] = table["GD"] / table["P"].clip(lower=1)
+    league_avg_ppg = float(table["points_per_game"].mean())
+    league_avg_gdpg = float(table["goal_difference_per_game"].mean())
+
+    table["ppg_index"] = table["points_per_game"] / league_avg_ppg if league_avg_ppg > 0 else 1.0
+    table["gd_component"] = 1.0 + 0.25 * (table["goal_difference_per_game"] - league_avg_gdpg)
+    table["base_strength"] = (table["ppg_index"] * table["gd_component"]).clip(0.55, 1.65)
+    base_map = table.set_index("Team")["base_strength"].to_dict()
+    league_avg_base = float(table["base_strength"].mean())
+
+    opp_rows: list[dict[str, Any]] = []
+    for row in played_results.to_dict("records"):
+        opp_rows.append({"Team": row["Home"], "Opponent": row["Away"]})
+        opp_rows.append({"Team": row["Away"], "Opponent": row["Home"]})
+    opp_df = pd.DataFrame(opp_rows)
+    opp_df["opponent_base_strength"] = opp_df["Opponent"].map(base_map)
+
+    grouped = opp_df.groupby("Team", as_index=False).agg(
+        played_matches_from_results=("Opponent", "size"),
+        past_opponent_strength=("opponent_base_strength", "mean"),
+        opponents_faced=("Opponent", lambda x: ", ".join(sorted(set(x)))),
+    )
+    grouped["schedule_factor"] = grouped["past_opponent_strength"] / league_avg_base if league_avg_base > 0 else 1.0
+    grouped["schedule_adjustment"] = grouped["schedule_factor"] ** SCHEDULE_ADJUSTMENT_WEIGHT
+    return grouped
+
+
+def apply_schedule_adjustment(team_parameters: pd.DataFrame, schedule_strength: pd.DataFrame) -> pd.DataFrame:
+    adjusted = team_parameters.copy()
+    adjusted = adjusted.merge(
+        schedule_strength[["Team", "past_opponent_strength", "schedule_factor", "schedule_adjustment"]],
+        on="Team",
+        how="left",
+    )
+    adjusted["past_opponent_strength"] = adjusted["past_opponent_strength"].fillna(1.0)
+    adjusted["schedule_factor"] = adjusted["schedule_factor"].fillna(1.0)
+    adjusted["schedule_adjustment"] = adjusted["schedule_adjustment"].fillna(1.0)
+
+    adjusted["raw_attack_strength"] = adjusted["attack_strength"]
+    adjusted["raw_defence_weakness"] = adjusted["defence_weakness"]
+    adjusted["raw_win_index"] = adjusted["win_index"]
+    adjusted["raw_loss_resistance"] = adjusted["loss_resistance"]
+
+    adjusted["attack_strength"] = (adjusted["attack_strength"] * adjusted["schedule_adjustment"]).clip(0.60, 1.80)
+    adjusted["defence_weakness"] = (adjusted["defence_weakness"] / adjusted["schedule_adjustment"]).clip(0.60, 1.80)
+    adjusted["win_index"] = (adjusted["win_index"] * adjusted["schedule_adjustment"]).clip(0.60, 1.80)
+    adjusted["loss_resistance"] = (adjusted["loss_resistance"] * adjusted["schedule_adjustment"]).clip(0.60, 1.80)
+    adjusted["draw_index"] = adjusted["draw_index"].clip(0.60, 1.80)
+    adjusted["schedule_adjusted"] = True
+    return adjusted
 
 
 def poisson_pmf(lmbda: float, max_goals: int) -> np.ndarray:
@@ -287,6 +414,10 @@ def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
     base_dir = config_path.parent
     config = load_config(config_path)
     current, fixtures = read_inputs(config, base_dir)
+    played_results = read_played_results(config, base_dir)
+    data_warnings = validate_played_results(current=current, fixtures=fixtures, played_results=played_results)
+    for warning in data_warnings:
+        print(f"WARNING: {warning}")
 
     teams = current["Team"].tolist()
     team_to_idx = {team: idx for idx, team in enumerate(teams)}
@@ -294,7 +425,9 @@ def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
     n = int(config["simulation_count"])
     rng = np.random.default_rng(int(config.get("random_seed", 0)))
 
-    team_params = compute_team_parameters(current, config)
+    team_params_raw = compute_team_parameters(current, config)
+    schedule_strength = compute_schedule_strength(current=current, played_results=played_results)
+    team_params = apply_schedule_adjustment(team_parameters=team_params_raw, schedule_strength=schedule_strength)
     param_map = team_params.set_index("Team").to_dict("index")
     fixture_model = fixture_lambdas(fixtures, team_params, config)
 
@@ -397,10 +530,12 @@ def run_simulation(config_path: str | Path = "config.json") -> SimulationResult:
         target_points_by_team=target_points_by_team,
         team_parameters=team_params,
         fixture_model=fixture_model,
+        schedule_strength=schedule_strength,
+        data_warnings=data_warnings,
     )
 
 
-def write_excel(result: SimulationResult, config: dict[str, Any], current: pd.DataFrame, fixtures: pd.DataFrame, output_path: str | Path) -> None:
+def write_excel(result: SimulationResult, config: dict[str, Any], current: pd.DataFrame, fixtures: pd.DataFrame, played_results: pd.DataFrame, output_path: str | Path) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -411,9 +546,13 @@ def write_excel(result: SimulationResult, config: dict[str, Any], current: pd.Da
         result.target_points_by_team.to_excel(writer, sheet_name="TargetPointsByTeam", index=False)
         current.to_excel(writer, sheet_name="CurrentTable", index=False)
         fixtures.to_excel(writer, sheet_name="Fixtures", index=False)
+        played_results.to_excel(writer, sheet_name="PlayedResults", index=False)
         result.team_parameters.to_excel(writer, sheet_name="TeamParameters", index=False)
+        result.schedule_strength.to_excel(writer, sheet_name="ScheduleStrength", index=False)
         result.fixture_model.to_excel(writer, sheet_name="FixtureModel", index=False)
         pd.DataFrame([config["model"]]).to_excel(writer, sheet_name="ModelSettings", index=False)
+        if result.data_warnings:
+            pd.DataFrame({"Warning": result.data_warnings}).to_excel(writer, sheet_name="DataWarnings", index=False)
 
         workbook = writer.book
         for sheet_name in workbook.sheetnames:
@@ -467,8 +606,9 @@ def main() -> None:
 
     result = run_simulation(temp_config_path)
     current, fixtures = read_inputs(config, config_path.parent)
+    played_results = read_played_results(config, config_path.parent)
     output_path = Path(config_path.parent) / config["data"]["output_xlsx"]
-    write_excel(result, config, current, fixtures, output_path)
+    write_excel(result, config, current, fixtures, played_results, output_path)
 
     print(f"Wrote {output_path}")
     print(result.summary[["Team", "Avg pts", "Avg position", "1st %", "Top3 %", "Top6 %", "12th %"]].to_string(index=False))

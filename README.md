@@ -6,8 +6,9 @@ Ohjelman perusidea:
 
 1. Päivitä nykyinen sarjataulukko tiedostoon `data/current_table.csv`.
 2. Päivitä jäljellä olevat runkosarjaottelut tiedostoon `data/remaining_fixtures.csv`.
-3. Aja simulaatio.
-4. Tulokset kirjoitetaan Exceliin `output/simulation_results.xlsx`.
+3. Päivitä pelatut ottelut tiedostoon `data/played_results.csv`.
+4. Aja simulaatio.
+5. Tulokset kirjoitetaan Exceliin `output/simulation_results.xlsx`.
 
 Ohjelma on tehty niin, että voit muuttaa lähtödataa käsin ja ajaa what-if-skenaarioita.
 
@@ -63,6 +64,19 @@ Pakolliset sarakkeet:
 | `Home` | Kotijoukkue |
 | `Away` | Vierasjoukkue |
 
+### `data/played_results.csv`
+
+Pakolliset sarakkeet:
+
+| Sarake | Selitys |
+|---|---|
+| `Date` | Ottelupäivä tekstinä |
+| `Home` | Kotijoukkue |
+| `Away` | Vierasjoukkue |
+| `HomeGoals` | Kotijoukkueen maalit (ei-negatiivinen kokonaisluku) |
+| `AwayGoals` | Vierasjoukkueen maalit (ei-negatiivinen kokonaisluku) |
+| `Source` | Lähde (vapaamuotoinen) |
+
 ## Malli lyhyesti
 
 Simulaatio käyttää Poisson-pohjaista maalimallia, jossa joukkueille lasketaan:
@@ -84,6 +98,15 @@ Nykykauden havaintoja shrinkataan kohti liigan keskiarvoa, jotta muutaman pelin 
 
 Mitä suurempi prior-arvo, sitä konservatiivisempi malli.
 
+Lisäksi malli käyttää `data/played_results.csv`-tiedostoa menneen otteluohjelman vahvuuskorjaukseen:
+
+- `current_table.csv` on edelleen lähtötilanne pisteille ja maaleille.
+- `remaining_fixtures.csv` on edelleen tulevat ottelut.
+- `played_results.csv` kertoo, ketä vastaan joukkueet ovat jo pelanneet.
+- Jos pisteitä on tullut suhteessa heikompaa otteluohjelmaa vastaan, parametreja säädetään hieman alaspäin.
+- Jos pisteitä on tullut suhteessa kovempaa otteluohjelmaa vastaan, parametreja säädetään hieman ylöspäin.
+- Korjaus on tarkoituksella maltillinen, ei mallin täydellinen uudelleenkirjoitus.
+
 ## Excel-tuloste
 
 Tulostiedostossa on välilehdet:
@@ -96,9 +119,12 @@ Tulostiedostossa on välilehdet:
 | `TargetPointsByTeam` | Sama pistekohtainen analyysi erikseen jokaiselle joukkueelle |
 | `CurrentTable` | Käytetty lähtötaulukko |
 | `Fixtures` | Käytetty otteluohjelma |
+| `PlayedResults` | Käytetyt pelatut ottelut |
 | `TeamParameters` | Mallin laskemat joukkueparametrit |
+| `ScheduleStrength` | Joukkueiden menneen otteluohjelman vahvuus ja korjauskerroin |
 | `FixtureModel` | Ottelukohtaiset lambda-arvot ja 1X2-todennäköisyydet ennen/jälkeen korjauksen |
 | `ModelSettings` | Malliasetukset |
+| `DataWarnings` | Mahdolliset ristiriidat syötedatojen välillä |
 
 
 ## TargetPoints-analyysi
