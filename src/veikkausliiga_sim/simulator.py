@@ -197,7 +197,16 @@ def compute_schedule_strength(current: pd.DataFrame, played_results: pd.DataFram
     table["gd_component"] = 1.0 + 0.25 * (table["goal_difference_per_game"] - league_avg_gdpg)
     table["base_strength"] = (table["ppg_index"] * table["gd_component"]).clip(0.55, 1.65)
     base_map = table.set_index("Team")["base_strength"].to_dict()
-    league_avg_base = float(table["base_strength"].mean())
+    all_teams = list(table["Team"])
+    team_count = len(all_teams)
+
+    expected_full_schedule_strength: dict[str, float] = {}
+    if team_count > 1:
+        total_base_strength = float(table["base_strength"].sum())
+        for team in all_teams:
+            expected_full_schedule_strength[team] = (total_base_strength - float(base_map[team])) / (team_count - 1)
+    else:
+        expected_full_schedule_strength = {team: 1.0 for team in all_teams}
 
     opp_rows: list[dict[str, Any]] = []
     for row in played_results.to_dict("records"):
@@ -211,9 +220,46 @@ def compute_schedule_strength(current: pd.DataFrame, played_results: pd.DataFram
         past_opponent_strength=("opponent_base_strength", "mean"),
         opponents_faced=("Opponent", lambda x: ", ".join(sorted(set(x)))),
     )
-    grouped["schedule_factor"] = grouped["past_opponent_strength"] / league_avg_base if league_avg_base > 0 else 1.0
+    grouped = pd.DataFrame({"Team": all_teams}).merge(grouped, on="Team", how="left")
+    grouped["played_matches_from_results"] = grouped["played_matches_from_results"].fillna(0).astype(int)
+    grouped["past_opponent_strength"] = grouped["past_opponent_strength"].fillna(1.0)
+    grouped["opponents_faced"] = grouped["opponents_faced"].fillna("")
+    grouped["expected_full_schedule_strength"] = grouped["Team"].map(expected_full_schedule_strength)
+    grouped["schedule_factor"] = np.where(
+        grouped["expected_full_schedule_strength"] > 0,
+        grouped["past_opponent_strength"] / grouped["expected_full_schedule_strength"],
+        1.0,
+    )
     grouped["schedule_adjustment"] = grouped["schedule_factor"] ** SCHEDULE_ADJUSTMENT_WEIGHT
+    grouped["base_strength"] = grouped["Team"].map(base_map)
+    _validate_complete_round_robin_invariant(opp_df=opp_df, grouped=grouped, team_count=team_count)
     return grouped
+
+
+def _validate_complete_round_robin_invariant(opp_df: pd.DataFrame, grouped: pd.DataFrame, team_count: int) -> None:
+    """Internal sanity check: complete balanced schedules should yield schedule_factor ~= 1.0."""
+    if team_count <= 1 or opp_df.empty:
+        return
+
+    matchup_counts = opp_df.groupby(["Team", "Opponent"]).size().unstack(fill_value=0)
+    if matchup_counts.empty:
+        return
+
+    if matchup_counts.shape[0] != team_count or matchup_counts.shape[1] != team_count:
+        return
+
+    matrix = matchup_counts.reindex(index=grouped["Team"], columns=grouped["Team"], fill_value=0).to_numpy()
+    np.fill_diagonal(matrix, 0)
+    off_diag_counts = matrix[matrix > 0]
+    if off_diag_counts.size == 0 or np.any(matrix == 0):
+        return
+
+    if np.all(off_diag_counts == off_diag_counts[0]):
+        max_deviation = float((grouped["schedule_factor"] - 1.0).abs().max())
+        if max_deviation > 1e-9:
+            raise ValueError(
+                "Schedule strength invariant failed: complete balanced round-robin should give schedule_factor ~= 1.0"
+            )
 
 
 def apply_schedule_adjustment(team_parameters: pd.DataFrame, schedule_strength: pd.DataFrame) -> pd.DataFrame:
