@@ -633,22 +633,43 @@ def main() -> None:
     parser.add_argument("--simulations", type=int, default=None, help="Override simulation count")
     parser.add_argument("--seed", type=int, default=None, help="Override random seed")
     parser.add_argument("--output", default=None, help="Override output xlsx path")
+    parser.add_argument("--iterations", type=int, default=None, help="Alias for --simulations")
+    parser.add_argument("--update-data", action="store_true", help="Update CSV data before simulation")
+    parser.add_argument("--provider", default="football-data-org", choices=["football-data-org"], help="Data provider")
+    parser.add_argument("--season", type=int, default=None, help="Season for data update")
+    parser.add_argument("--allow-stale-data", action="store_true", help="Allow simulation with existing CSVs if update fails")
     args = parser.parse_args()
 
     config_path = Path(args.config)
     config = load_config(config_path)
-    if args.simulations is not None:
-        config["simulation_count"] = args.simulations
+    sim_count = args.simulations if args.simulations is not None else args.iterations
+    if sim_count is not None:
+        config["simulation_count"] = sim_count
     if args.seed is not None:
         config["random_seed"] = args.seed
     if args.output is not None:
         config["data"]["output_xlsx"] = args.output
 
     temp_config_path = config_path
-    if args.simulations is not None or args.seed is not None or args.output is not None:
+    if sim_count is not None or args.seed is not None or args.output is not None:
         temp_config_path = config_path.parent / ".runtime_config.json"
         with open(temp_config_path, "w", encoding="utf-8") as handle:
             json.dump(config, handle, indent=2, ensure_ascii=False)
+
+    if args.update_data:
+        if args.season is None:
+            raise ValueError("--season is required when --update-data is used")
+        try:
+            from update_data import update_from_football_data_org
+
+            if args.provider == "football-data-org":
+                update_from_football_data_org(args.season)
+        except Exception as exc:
+            if not args.allow_stale_data:
+                raise RuntimeError(
+                    f"Data update failed and --allow-stale-data was not set: {exc}"
+                ) from exc
+            print(f"WARNING: Data update failed, continuing with stale CSV files: {exc}")
 
     result = run_simulation(temp_config_path)
     current, fixtures = read_inputs(config, config_path.parent)

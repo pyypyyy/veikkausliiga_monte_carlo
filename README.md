@@ -34,6 +34,25 @@ Varsinainen raskaampi ajo:
 python run_simulation.py --simulations 1000000
 ```
 
+API-päivitys football-data.org:sta:
+
+```bash
+export FOOTBALL_DATA_API_KEY="..."
+python -m src.update_data --provider football-data-org --season 2026
+```
+
+Simulaatio + datapäivitys yhdellä komennolla:
+
+```bash
+python run_simulation.py --update-data --provider football-data-org --season 2026 --iterations 500000
+```
+
+Jos datapäivitys epäonnistuu, simulaatio keskeytyy oletuksena. Voit sallia vanhan datan käytön:
+
+```bash
+python run_simulation.py --update-data --provider football-data-org --season 2026 --allow-stale-data
+```
+
 Oletusasetukset ovat tiedostossa `config.json`.
 
 ## Syötetiedostot
