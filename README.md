@@ -105,6 +105,7 @@ Lisäksi malli käyttää `data/played_results.csv`-tiedostoa menneen otteluohje
 - `played_results.csv` kertoo, ketä vastaan joukkueet ovat jo pelanneet.
 - Jos pisteitä on tullut suhteessa heikompaa otteluohjelmaa vastaan, parametreja säädetään hieman alaspäin.
 - Jos pisteitä on tullut suhteessa kovempaa otteluohjelmaa vastaan, parametreja säädetään hieman ylöspäin.
+- Otteluohjelman vahvuus normalisoidaan nyt joukkuekohtaisesti oman mahdollisen koko runkosarjan vastustajajoukon keskiarvoon (ei koko liigan keskiarvoon), jolloin korjaus luonnostaan hiipuu kohti arvoa 1.0 kauden edetessä.
 - Korjaus on tarkoituksella maltillinen, ei mallin täydellinen uudelleenkirjoitus.
 
 ## Excel-tuloste
